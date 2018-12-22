@@ -108,6 +108,13 @@ class Topo(app_manager.RyuApp):
     # 捕获拓扑改变的函数
     @set_ev_cls(event.EventTopoChange)
     def topoChangeHandler(self, ev):
+        """
+        当拓扑发生变化时，首先重新计算新的最短路径，删除之前的流表(table-miss和packet_in消息处理流表项除外)
+        重新下发流表
+        :param ev:
+        :return:
+        """
+        print('topoChangeHandler: topo changed !')
         print('==============getAdjMatrix=================')
         print(self.getAdjMatrix())
         print('===============switchMap==================')
@@ -124,44 +131,14 @@ class Topo(app_manager.RyuApp):
         #     print(a[0],a[1],a[2],a[3])
         # print(ev.msg)
 
-        time.sleep(20)
+        time.sleep(30)
         ip_port_dict = self.compute_path_between_all_hosts()
-        # self.add_flow_table_item()
+        print('I am going to delete old flow tables.I am going to delete old flow tables')
         self.drop_all_flow_entities()
+        print('I am wating here')
+        time.sleep(120)             # 为了观察流表真的被删除了，后面可以删除代码
+        self.add_flow_table_item(ip_port_dict)
 
-        # 每一个host2host，对其所经过路径上的所有交换机下发流表
-        for item in ip_port_dict:
-            # src_ip = item[0]
-            # dst_ip = item[1]
-            src_ip, dst_ip = item
-            # print('146   items: {0}, src_ip: {1}, dst_ip: {2}'.format(item, src_ip, dst_ip))
-            connection = ip_port_dict[item]
-            path, ports, macs = connection
-            src_mac, dst_mac = macs
-            # print('path: {0}, ports: {1}, macs: {2}'.format(path, ports, macs))
-            # print('src_mac: {0}, dst_mac: {1}'.format(src_mac, dst_mac))
-            for i in range(len(path)):
-                switch_dpid = path[i]
-                # print('type of self.switchMap[switch_dpid]: {0}'.format(type(self.switchMap[switch_dpid])))
-                print(self.switches[0].__dict__)
-                datapath = self.switches[self.switchMap[switch_dpid]].dp
-                parser = datapath.ofproto_parser
-                in_port = int(ports[i]['in_port'])
-                out_port = int(ports[i]['out_port'])
-
-                actions = [parser.OFPActionOutput(out_port)]  # 转发动作
-                match = parser.OFPMatch(
-                    ipv4_src=src_ip, ipv4_dst=dst_ip, eth_src=src_mac,
-                    eth_dst=dst_mac, eth_type=ether_types.ETH_TYPE_IP,
-                    in_port=in_port
-                )
-                match_drop = parser.OFPMatch(
-                    ipv4_src=src_ip, ipv4_dst=dst_ip, eth_src=src_mac,
-                    eth_dst=dst_mac, eth_type=ether_types.ETH_TYPE_IP,
-                )
-                actions_drop = []
-                self.add_flow(datapath, 2, match, actions)
-                self.add_flow(datapath, 1, match_drop, actions_drop)
 
     def add_flow(self, datapath, priority, match, actions, buffer_id=None):
         """
@@ -202,8 +179,10 @@ class Topo(app_manager.RyuApp):
         for switch in self.switches:
             datapath = switch.dp
             parser = datapath.ofproto_parser
-            match = parser.OFPMatch()           # 必须保留table-miss和packet_in的流表项
-            self.drop_flow(datapath, match)
+            for mac in self.host:
+                print('mac: {0}'.format(mac))
+                match = parser.OFPMatch(eth_dst=mac)           # 必须保留table-miss和packet_in的流表项
+                self.drop_flow(datapath, match)
 
     def index2switch_id(self, switch_index_seq):
         """
@@ -286,14 +265,14 @@ class Topo(app_manager.RyuApp):
                     port = item[2]
                 else:
                     port = item[0]
-                print('src_switch:{0}, dst_switch:{1}, port: {2}'.format(src_switch, dst_switch, port))
+                # print('src_switch:{0}, dst_switch:{1}, port: {2}'.format(src_switch, dst_switch, port))
                 return port
             elif src_switch == dst_dpid and dst_switch == src_dpid:
                 if in_or_out == 1:
                     port = item[0]
                 else:
                     port = item[2]
-                print('src_switch:{0}, dst_switch:{1}, port: {2}'.format(src_switch, dst_switch, port))
+                # print('src_switch:{0}, dst_switch:{1}, port: {2}'.format(src_switch, dst_switch, port))
                 return port
 
     def port_maps(self):
@@ -384,13 +363,13 @@ class Topo(app_manager.RyuApp):
         path_dict = self.get_port_seq()  # path_dict[(src_id, dst_id)] = [path, ports_list]
 
         # 测试每条路径上的端口序列是否正确
-        print('*********************379 379*********************')
-        for key, val in path_dict.items():
-            if key[0] and key[1]:
-                path = val[0]
-                ports = val[1]
-                print('path: {0}, ports: {1}'.format(path, ports))
-        print('******************************************')
+        # print('*********************379 379*********************')
+        # for key, val in path_dict.items():
+        #     if key[0] and key[1]:
+        #         path = val[0]
+        #         ports = val[1]
+        #         print('path: {0}, ports: {1}'.format(path, ports))
+        # print('******************************************')
 
         # 对每一对IP,返回它们之间的最短路径上的交换机结点及每个结点的入端口和出端口
 
@@ -428,13 +407,48 @@ class Topo(app_manager.RyuApp):
                     # print('after path: {0}, ports: {1}'.format(path, ports))
         return ip_port_dict
 
-    def add_flow_table_item(self):
+    def add_flow_table_item(self, ip_port_dict):
         """
-        最短路径计算完毕，下发流表项
+        最短路径计算完毕，下发流表
         :return:
         """
-        ip_port_dict = self.compute_path_between_all_hosts()
+        # ip_port_dict = self.compute_path_between_all_hosts()
         # 打印出
-        print('=******************* ip_port_dict ********************=')
+        # print('=******************* ip_port_dict ********************=')
+        # for item in ip_port_dict:
+        #     print('{0}: {1}'.format(item, ip_port_dict[item]))
+        # print('=******************* ip_port_dict end********************=')
+
+        # 每一个host2host，对其所经过路径上的所有交换机下发流表
         for item in ip_port_dict:
-            print('{0}: {1}'.format(item, ip_port_dict[item]))
+            # src_ip = item[0]
+            # dst_ip = item[1]
+            src_ip, dst_ip = item
+            # print('146   items: {0}, src_ip: {1}, dst_ip: {2}'.format(item, src_ip, dst_ip))
+            connection = ip_port_dict[item]
+            path, ports, macs = connection
+            src_mac, dst_mac = macs
+            # print('path: {0}, ports: {1}, macs: {2}'.format(path, ports, macs))
+            # print('src_mac: {0}, dst_mac: {1}'.format(src_mac, dst_mac))
+            for i in range(len(path)):
+                switch_dpid = path[i]
+                # print('type of self.switchMap[switch_dpid]: {0}'.format(type(self.switchMap[switch_dpid])))
+                # print(self.switches[0].__dict__)
+                datapath = self.switches[self.switchMap[switch_dpid]].dp
+                parser = datapath.ofproto_parser
+                in_port = int(ports[i]['in_port'])
+                out_port = int(ports[i]['out_port'])
+
+                actions = [parser.OFPActionOutput(out_port)]  # 转发动作
+                match = parser.OFPMatch(
+                    ipv4_src=src_ip, ipv4_dst=dst_ip, eth_src=src_mac,
+                    eth_dst=dst_mac, eth_type=ether_types.ETH_TYPE_IP,
+                    in_port=in_port
+                )
+                match_drop = parser.OFPMatch(
+                    ipv4_src=src_ip, ipv4_dst=dst_ip, eth_src=src_mac,
+                    eth_dst=dst_mac, eth_type=ether_types.ETH_TYPE_IP,
+                )
+                actions_drop = []
+                self.add_flow(datapath, 2, match, actions)
+                self.add_flow(datapath, 1, match_drop, actions_drop)
